@@ -17,6 +17,8 @@ jobs:
           distribution: temurin
           java-version: 21
       - run: npm install
+      - name: Kelime listesini indir
+        run: curl -fL -o www/kelimeler.txt https://raw.githubusercontent.com/CanNuhlar/Turkce-Kelime-Listesi/master/turkce_kelime_listesi.txt && wc -l www/kelimeler.txt
       - name: Android projesini olustur
         run: |
           npx cap add android
