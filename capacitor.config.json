@@ -1,0 +1,8 @@
+{
+  "appId": "com.lugatimergen.app",
+  "appName": "Lugat-ı Mergen",
+  "webDir": "www",
+  "plugins": {
+    "CapacitorHttp": { "enabled": true }
+  }
+}

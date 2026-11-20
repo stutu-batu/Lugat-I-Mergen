@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Lugat-ı Mergen</title>
+<style>
+:root{--bg:#f2f5f8;--card:#fff;--ink:#14283d;--mut:#5d6f82;--acc:#1f5fa8;--line:#d9e1e9;--star:#c8372d;color-scheme:light}
+@media(prefers-color-scheme:dark){:root{--bg:#0e1a27;--card:#16273a;--ink:#e8eef5;--mut:#9fb0c2;--acc:#6fa8ee;--line:#27394d;--star:#ff7a6e;color-scheme:dark}}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,sans-serif;display:flex;flex-direction:column;padding-top:env(safe-area-inset-top)}
+main{flex:1;overflow-y:auto;padding:16px 16px 24px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px;margin-bottom:14px}
+.card small{color:var(--mut)}
+.card h2{font:600 2rem/1.15 Georgia,'Times New Roman',serif;margin:6px 0 10px;color:var(--acc)}
+.card ol{margin:0;padding-left:1.2em}
+.card li{margin-bottom:4px}
+.ex{color:var(--mut);font-style:italic;margin:10px 0 0}
+.fav{float:right;background:none;border:0;font-size:1.6rem;color:var(--star);padding:0 0 0 8px}
+.btn{display:block;width:100%;padding:14px;border:0;border-radius:12px;background:var(--acc);color:var(--bg);font:600 1rem system-ui;margin-top:6px}
+.btn.alt{background:none;border:1px solid var(--line);color:var(--ink)}
+h1{font:600 1.5rem Georgia,serif;margin:4px 0 14px}
+.empty,.note{color:var(--mut);text-align:center;margin:30px 10px}
+.note{font-size:.85rem;text-align:left;margin:10px 2px}
+label{display:block;margin:14px 0 6px;font-weight:600}
+select{width:100%;padding:12px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink);font-size:1rem}
+nav{display:flex;border-top:1px solid var(--line);background:var(--card);padding-bottom:env(safe-area-inset-bottom)}
+nav button{flex:1;padding:14px 4px;background:none;border:0;color:var(--mut);font:600 .9rem system-ui}
+nav button.on{color:var(--acc);box-shadow:inset 0 3px 0 var(--acc)}
+button:focus-visible,select:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+</style>
+</head>
+<body>
+<main id="main"></main>
+<nav id="nav">
+  <button data-t="today">Bugün</button>
+  <button data-t="hist">Geçmiş</button>
+  <button data-t="favs">Favoriler</button>
+  <button data-t="set">Ayarlar</button>
+</nav>
+<script>
+// ---- Yedek kelime listesi (TDK'ya ulaşılamazsa kullanılır) ----
+const BUNDLED=[
+["ahenk","Uyum, düzen."],["efsun","Büyü."],["gurbet","Kişinin yaşadığı yer dışında kalan yer."],
+["hasret","Özlem."],["sükûnet","Sakinlik, dinginlik."],["yadigâr","Anı olarak saklanan şey."],
+["telaş","Acele ve heyecanla hareket etme."],["hülya","Hayal, düş."],["kaygı","Tasa, endişe."],
+["vefa","Sözünde durma, sadakat."],["mütevazı","Alçak gönüllü."],["ferah","Genişlik, rahatlık."],
+["nostalji","Geçmişe duyulan özlem."],["ömür","Yaşam süresi."],["bahtiyar","Mutlu, talihli."],
+["şefkat","Karşılık beklemeden gösterilen sevgi ve koruma."],["tebessüm","Gülümseme."],
+["meşgul","Bir işle uğraşan."],["yetenek","Bir kişinin doğuştan getirdiği güç, kabiliyet."],
+["asude","Rahat, huzurlu."]
+].map(([madde,a])=>({madde,anlam:[a],ornek:""}));
+
+// ---- Yardımcılar ----
+const $=s=>document.querySelector(s);
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const LS={get:(k,d)=>{try{const v=JSON.parse(localStorage.getItem(k));return v??d}catch{return d}},set:(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch{}}};
+const pad=n=>String(n).padStart(2,'0');
+const dstr=d=>d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());
+const LN=()=>window.Capacitor&&window.Capacitor.Plugins&&window.Capacitor.Plugins.LocalNotifications;
+
+let settings=LS.get('settings',{count:1,hour:9});
+let words=LS.get('words',{});      // "2026-11-20#0" -> {madde, anlam[], ornek}
+let favs=LS.get('favs',[]);        // [{madde, anlam[], ornek}]
+let tab='today', extra=null, status='';
+
+// ---- TDK ----
+let tdkList=null;
+async function tdkWord(){
+  if(!tdkList){
+    const r=await fetch('https://sozluk.gov.tr/autocomplete.json');
+    const j=await r.json();
+    tdkList=j.map(x=>x.madde).filter(m=>m&&/^[a-zçğıöşüâîû]{4,}$/i.test(m));
+    if(!tdkList.length) throw new Error('liste boş');
+  }
+  const w=tdkList[Math.floor(Math.random()*tdkList.length)];
+  const r=await fetch('https://sozluk.gov.tr/gts?ara='+encodeURIComponent(w));
+  const j=await r.json();
+  if(!Array.isArray(j)||!j[0]||!j[0].anlamlarListe) throw new Error('sonuç yok');
+  const list=j[0].anlamlarListe;
+  const anlam=list.slice(0,3).map(x=>x.anlam).filter(Boolean);
+  const ex=list.find(x=>x.orneklerListe&&x.orneklerListe[0]);
+  if(!anlam.length) throw new Error('anlam yok');
+  return {madde:j[0].madde||w,anlam,ornek:ex?ex.orneklerListe[0].ornek:""};
+}
+function bundledWord(){
+  const used=new Set(Object.values(words).map(w=>w.madde));
+  const free=BUNDLED.filter(w=>!used.has(w.madde));
+  const pool=free.length?free:BUNDLED;
+  return pool[Math.floor(Math.random()*pool.length)];
+}
+async function getWord(){
+  try{const w=await tdkWord();status='';return w}
+  catch(e){status='TDK\'ya ulaşılamadı, yedek listeden kelime seçildi.';return bundledWord()}
+}
+
+// ---- Zamanlama ----
+function slots(days=7){
+  const out=[];
+  for(let d=0;d<days;d++){
+    const day=new Date();day.setDate(day.getDate()+d);
+    for(let i=0;i<settings.count;i++){
+      const t=new Date(day);t.setHours(settings.hour+i*4,0,0,0);
+      out.push({k:dstr(day)+'#'+i,t,today:d===0});
+    }
+  }
+  return out;
+}
+async function fill(onlyToday){
+  for(const s of slots()){
+    if(onlyToday&&!s.today) continue;
+    if(!words[s.k]){words[s.k]=await getWord();LS.set('words',words)}
+  }
+}
+async function schedule(){
+  const ln=LN();if(!ln) return;
+  try{
+    let p=await ln.checkPermissions();
+    if(p.display!=='granted') p=await ln.requestPermissions();
+    if(p.display!=='granted'){status='Bildirim izni verilmedi.';return}
+    const pend=await ln.getPending();
+    if(pend.notifications.length) await ln.cancel({notifications:pend.notifications});
+    const list=[];
+    slots().forEach((s,n)=>{
+      const w=words[s.k];
+      if(w&&s.t>new Date()) list.push({id:n+1,title:w.madde,body:w.anlam[0],schedule:{at:s.t,allowWhileIdle:true}});
+    });
+    if(list.length) await ln.schedule({notifications:list});
+  }catch(e){status='Bildirimler kurulamadı.'}
+}
+async function refresh(){
+  await fill(true);render();
+  await fill(false);await schedule();render();
+}
+
+// ---- Arayüz ----
+const isFav=m=>favs.some(f=>f.madde===m);
+function card(w,label){
+  return `<div class="card"><button class="fav" aria-label="Favori" data-fav="${esc(w.madde)}">${isFav(w.madde)?'★':'☆'}</button>
+  <small>${esc(label)}</small><h2>${esc(w.madde)}</h2>
+  <ol>${w.anlam.map(a=>`<li>${esc(a)}</li>`).join('')}</ol>
+  ${w.ornek?`<p class="ex">${esc(w.ornek)}</p>`:''}</div>`;
+}
+function view(){
+  const today=dstr(new Date());
+  if(tab==='today'){
+    const items=slots().filter(s=>s.today).map(s=>words[s.k]).filter(Boolean);
+    let h='<h1>Bugünün kelimesi</h1>';
+    h+=items.length?items.map((w,i)=>card(w,items.length>1?(i+1)+'. kelime':'Bugün')).join(''):'<p class="empty">Kelime yükleniyor…</p>';
+    if(extra) h+=card(extra,'Rastgele');
+    h+='<button class="btn alt" id="rnd">Rastgele kelime getir</button>';
+    if(status) h+=`<p class="note">${esc(status)}</p>`;
+    return h;
+  }
+  if(tab==='hist'){
+    const keys=Object.keys(words).filter(k=>k.slice(0,10)<today).sort().reverse();
+    return '<h1>Geçmiş kelimeler</h1>'+(keys.length?keys.map(k=>card(words[k],k.slice(0,10).split('-').reverse().join('.'))).join(''):'<p class="empty">Henüz geçmiş kelime yok. Yarın buraya eklenecek.</p>');
+  }
+  if(tab==='favs'){
+    return '<h1>Favoriler</h1>'+(favs.length?favs.map(w=>card(w,'Favori')).join(''):'<p class="empty">Bir kelimenin yıldızına dokunarak favorilere ekle.</p>');
+  }
+  let h='<h1>Ayarlar</h1><label for="cnt">Günde kaç kelime?</label><select id="cnt">';
+  for(let i=1;i<=3;i++) h+=`<option value="${i}"${settings.count===i?' selected':''}>${i}</option>`;
+  h+='</select><label for="hr">İlk bildirim saati</label><select id="hr">';
+  for(let i=7;i<=16;i++) h+=`<option value="${i}"${settings.hour===i?' selected':''}>${pad(i)}:00</option>`;
+  h+='</select><p class="note">Birden fazla kelimede sonraki bildirimler 4 saat arayla gelir. Kelimeler uygulama her açıldığında 7 gün öncesinden hazırlanır; uygulamayı haftada en az bir kez aç.</p>';
+  h+='<button class="btn alt" id="test">Deneme bildirimi gönder</button>';
+  if(status) h+=`<p class="note">${esc(status)}</p>`;
+  return h;
+}
+function render(){
+  $('#main').innerHTML=view();
+  document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.t===tab));
+}
+
+// ---- Olaylar ----
+document.addEventListener('click',async e=>{
+  const t=e.target;
+  if(t.dataset.t){tab=t.dataset.t;render();return}
+  if(t.dataset.fav){
+    const m=t.dataset.fav;
+    if(isFav(m)) favs=favs.filter(f=>f.madde!==m);
+    else{
+      const w=Object.values(words).concat(extra?[extra]:[]).find(x=>x.madde===m);
+      if(w) favs.push(w);
+    }
+    LS.set('favs',favs);render();return;
+  }
+  if(t.id==='rnd'){t.textContent='Getiriliyor…';extra=await getWord();render()}
+  if(t.id==='test'){
+    const ln=LN();
+    if(!ln){status='Bildirimler yalnızca telefondaki uygulamada çalışır.';render();return}
+    try{
+      let p=await ln.checkPermissions();
+      if(p.display!=='granted') p=await ln.requestPermissions();
+      if(p.display!=='granted'){status='Bildirim izni verilmedi.';render();return}
+      await ln.schedule({notifications:[{id:999,title:'Lugat-ı Mergen',body:'Bildirimler çalışıyor.',schedule:{at:new Date(Date.now()+5000),allowWhileIdle:true}}]});
+      status='5 saniye içinde bildirim gelecek.';
+    }catch(err){status='Deneme bildirimi gönderilemedi.'}
+    render();
+  }
+});
+document.addEventListener('change',async e=>{
+  if(e.target.id==='cnt'||e.target.id==='hr'){
+    settings={count:+$('#cnt').value,hour:+$('#hr').value};
+    LS.set('settings',settings);
+    // Ayar değişince bugünün ve sonraki günlerin kelimeleri yeniden dağıtılır
+    const today=dstr(new Date());
+    Object.keys(words).filter(k=>k.slice(0,10)>=today).forEach(k=>{
+      const i=+k.split('#')[1];
+      if(i>=settings.count) delete words[k];
+    });
+    LS.set('words',words);
+    status='';refresh();
+  }
+});
+
+render();
+refresh();
+</script>
+</body>
+</html>
