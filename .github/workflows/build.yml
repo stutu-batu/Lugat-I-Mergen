@@ -4,6 +4,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -17,18 +20,37 @@ jobs:
           distribution: temurin
           java-version: 21
       - run: npm install
+
       - name: Kelime listesini indir
         run: curl -fL -o www/kelimeler.txt https://raw.githubusercontent.com/CanNuhlar/Turkce-Kelime-Listesi/master/turkce_kelime_listesi.txt && wc -l www/kelimeler.txt
+
+      - name: Surumu belirle
+        run: |
+          BASE=$(node -p "require('./package.json').version")
+          VER="$(echo "$BASE" | cut -d. -f1,2).${{ github.run_number }}"
+          echo "VER=$VER" >> "$GITHUB_ENV"
+          sed -i "s/__VERSION__/$VER/" www/index.html
+          echo "Surum: $VER"
+
       - name: Android projesini olustur
         run: |
           npx cap add android
+          sed -i "s/versionCode 1/versionCode ${{ github.run_number }}/; s/versionName \"1.0\"/versionName \"$VER\"/" android/app/build.gradle
+          grep -n "versionCode\|versionName" android/app/build.gradle
           npx cap sync android
+
       - name: APK derle
         run: |
           cd android
           chmod +x gradlew
           ./gradlew assembleDebug
-      - uses: actions/upload-artifact@v4
-        with:
-          name: lugat-i-mergen-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Release olustur
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp android/app/build/outputs/apk/debug/app-debug.apk "Lugat-i-Mergen-v$VER.apk"
+          gh release create "v$VER" "Lugat-i-Mergen-v$VER.apk#Lugat-ı Mergen v$VER" \
+            --title "Lugat-ı Mergen v$VER" \
+            --target "$GITHUB_SHA" \
+            --generate-notes
