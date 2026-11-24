@@ -16,6 +16,14 @@ main{flex:1;overflow-y:auto;padding:16px 16px 24px}
 .card h2{font:600 2rem/1.15 Georgia,'Times New Roman',serif;margin:6px 0 10px;color:var(--acc)}
 .card ol{margin:0;padding-left:1.2em}
 .card li{margin-bottom:4px}
+.hd{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.hd h1{margin:4px 0}
+.ic{width:44px;height:44px;border-radius:12px;border:1px solid var(--line);background:var(--card);color:var(--ink);display:grid;place-items:center;padding:0}
+.ic.on{color:var(--acc);border-color:var(--acc)}
+.sbox{display:flex;gap:8px;margin-bottom:14px}
+.sbox input{flex:1;min-width:0;padding:12px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink);font-size:1rem}
+.sbox .btn{width:auto;margin:0;padding:12px 18px}
+input:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
 .lnk{margin-top:12px;background:none;border:0;padding:6px 0;color:var(--acc);font:600 .9rem system-ui}
 .ex{color:var(--mut);font-style:italic;margin:10px 0 0}
 .fav{float:right;background:none;border:0;font-size:1.6rem;color:var(--star);padding:0 0 0 8px}
@@ -65,6 +73,8 @@ let settings=LS.get('settings',{count:1,hour:9});
 let words=LS.get('words',{});      // "2026-11-20#0" -> {madde, anlam[], ornek}
 let favs=LS.get('favs',[]);        // [{madde, anlam[], ornek}]
 let tab='today', extra=null, status='';
+let searchOpen=false, searchQ='', searchRes=null;
+const VERSION='__VERSION__';
 
 // ---- Kelime listesi (kelimeler.txt) + TDK anlam sorgusu ----
 let tdkList=null;
@@ -77,12 +87,12 @@ async function loadList(){
   if(!tdkList.length) throw new Error('liste boş');
   return tdkList;
 }
-async function lookup(w){
+async function lookup(w,max=3){
   const r=await fetch('https://sozluk.gov.tr/gts?ara='+encodeURIComponent(w));
   const j=await r.json();
   if(!Array.isArray(j)||!j[0]||!j[0].anlamlarListe) return null; // TDK'da yoksa {error:...} döner
   const list=j[0].anlamlarListe;
-  const anlam=list.slice(0,3).map(x=>String(x.anlam||'').replace('►','').trim()).filter(Boolean);
+  const anlam=list.slice(0,max).map(x=>String(x.anlam||'').replace('►','').trim()).filter(Boolean);
   if(!anlam.length) return null;
   const ex=list.find(x=>x.orneklerListe&&x.orneklerListe[0]);
   return {madde:j[0].madde||w,anlam,ornek:ex?ex.orneklerListe[0].ornek:""};
@@ -161,7 +171,16 @@ function view(){
   const today=dstr(new Date());
   if(tab==='today'){
     const items=slots().filter(s=>s.today).map(s=>words[s.k]).filter(Boolean);
-    let h='<h1>Bugünün kelimesi</h1>';
+    let h=`<div class="hd"><h1>Bugünün kelimesi</h1><button class="ic${searchOpen?' on':''}" id="sbtn" aria-label="Kelime ara"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg></button></div>`;
+    if(searchOpen){
+      h+=`<div class="sbox"><input id="q" type="search" placeholder="TDK'da kelime ara" autocomplete="off" autocapitalize="none" spellcheck="false" value="${esc(searchQ)}"><button class="btn" id="go">Ara</button></div>`;
+      if(searchRes){
+        if(searchRes.loading) h+='<p class="empty">Aranıyor…</p>';
+        else if(searchRes.w) h+=card(searchRes.w,'Arama sonucu');
+        else if(searchRes.none) h+=`<p class="empty">“${esc(searchQ)}” TDK sözlüğünde bulunamadı.</p>`;
+        else h+='<p class="empty">TDK\'ya ulaşılamadı. İnternet bağlantını kontrol et.</p>';
+      }
+    }
     h+=items.length?items.map((w,i)=>card(w,items.length>1?(i+1)+'. kelime':'Bugün')).join(''):'<p class="empty">Kelime yükleniyor…</p>';
     if(extra) h+=card(extra,'Rastgele');
     h+='<button class="btn alt" id="rnd">Rastgele kelime getir</button>';
@@ -181,6 +200,7 @@ function view(){
   for(let i=7;i<=16;i++) h+=`<option value="${i}"${settings.hour===i?' selected':''}>${pad(i)}:00</option>`;
   h+='</select><p class="note">Birden fazla kelimede sonraki bildirimler 4 saat arayla gelir. Kelimeler uygulama her açıldığında 7 gün öncesinden hazırlanır; uygulamayı haftada en az bir kez aç.</p>';
   h+='<button class="btn alt" id="test">Deneme bildirimi gönder</button>';
+  h+=`<p class="note">Lugat-ı Mergen · sürüm ${esc(VERSION.startsWith('__')?'geliştirme':VERSION)}</p>`;
   if(status) h+=`<p class="note">${esc(status)}</p>`;
   return h;
 }
@@ -191,17 +211,25 @@ function render(){
 
 // ---- Olaylar ----
 document.addEventListener('click',async e=>{
-  const t=e.target;
+  const t=e.target.closest('button')||e.target;
   if(t.dataset.t){tab=t.dataset.t;render();return}
   if(t.dataset.fav){
     const m=t.dataset.fav;
     if(isFav(m)) favs=favs.filter(f=>f.madde!==m);
     else{
-      const w=Object.values(words).concat(extra?[extra]:[]).find(x=>x.madde===m);
+      const w=Object.values(words).concat(extra?[extra]:[],searchRes&&searchRes.w?[searchRes.w]:[]).find(x=>x.madde===m);
       if(w) favs.push(w);
     }
     LS.set('favs',favs);render();return;
   }
+  if(t.id==='sbtn'){
+    searchOpen=!searchOpen;
+    if(!searchOpen){searchRes=null;searchQ=''}
+    render();
+    if(searchOpen&&$('#q')) $('#q').focus();
+    return;
+  }
+  if(t.id==='go'){doSearch();return}
   if(t.dataset.open){window.open('https://sozluk.gov.tr/?kelime='+encodeURIComponent(t.dataset.open),'_blank');return}
   if(t.id==='rnd'){t.textContent='Getiriliyor…';extra=await getWord();render()}
   if(t.id==='test'){
@@ -231,6 +259,17 @@ document.addEventListener('change',async e=>{
     status='';refresh();
   }
 });
+
+async function doSearch(){
+  const inp=$('#q');
+  const q=((inp&&inp.value)||'').trim().toLocaleLowerCase('tr');
+  if(!q) return;
+  searchQ=q;searchRes={loading:true};render();
+  try{const w=await lookup(q,8);searchRes=w?{w}:{none:true}}
+  catch(err){searchRes={err:true}}
+  render();
+}
+document.addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target.id==='q'){e.preventDefault();doSearch()}});
 
 render();
 refresh();
