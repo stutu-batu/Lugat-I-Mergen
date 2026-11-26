@@ -16,6 +16,13 @@ main{flex:1;overflow-y:auto;padding:16px 16px 24px}
 .card h2{font:600 2rem/1.15 Georgia,'Times New Roman',serif;margin:6px 0 10px;color:var(--acc)}
 .card ol{margin:0;padding-left:1.2em}
 .card li{margin-bottom:4px}
+.tag{display:inline-block;margin-left:6px;padding:1px 9px;border-radius:99px;border:1px solid var(--line);color:var(--acc);font-size:.75rem;font-weight:600;vertical-align:middle}
+.card h2.long{font-size:1.4rem}
+.mean{margin:0}
+.sec{color:var(--mut);font-weight:600;margin:18px 2px 8px}
+.lic{margin:16px 0;font-size:.85rem;color:var(--mut)}
+.lic summary{padding:8px 0;font-weight:600;cursor:pointer}
+.lic pre{white-space:pre-wrap;word-break:break-word;font:12px/1.4 ui-monospace,monospace;margin:8px 0 0}
 .hd{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
 .hd h1{margin:4px 0}
 .ic{width:44px;height:44px;border-radius:12px;border:1px solid var(--line);background:var(--card);color:var(--ink);display:grid;place-items:center;padding:0}
@@ -73,7 +80,7 @@ let settings=LS.get('settings',{count:1,hour:9});
 let words=LS.get('words',{});      // "2026-11-20#0" -> {madde, anlam[], ornek}
 let favs=LS.get('favs',[]);        // [{madde, anlam[], ornek}]
 let tab='today', extra=null, status='';
-let searchOpen=false, searchQ='', searchRes=null;
+let searchOpen=false, searchQ='', searchRes=null, licText='';
 const VERSION='__VERSION__';
 
 // ---- Kelime listesi (kelimeler.txt) + TDK anlam sorgusu ----
@@ -119,6 +126,62 @@ async function getWord(){
   catch(e){status='TDK\'ya ulaşılamadı, yedek listeden kelime seçildi.';return bundledWord()}
 }
 
+// ---- Deyim ve atasözleri (deyimler.json) ----
+let pv=null, pvBy=null;
+async function loadPv(){
+  if(pv) return pv;
+  const r=await fetch('deyimler.json');
+  if(!r.ok) throw new Error('liste yok');
+  const a=await r.json();
+  const out=[];
+  for(const x of a){
+    if(!x||!x.proverb||!x.meaning) continue;
+    const t=String(x.proverb_type||'');
+    const tur=/^atas/i.test(t)?'Atasözü':(/^deyim/i.test(t)?'Deyim':null);
+    if(!tur) continue;
+    const m=String(x.meaning);
+    const i=m.indexOf(': ');                       // "anlam: örnek cümle" biçimi
+    const madde=String(x.proverb).trim();
+    out.push({tur,madde,k:madde.toLocaleLowerCase('tr'),anlam:[(i>0?m.slice(0,i):m).trim()],ornek:i>0?m.slice(i+2).trim():''});
+  }
+  if(!out.length) throw new Error('liste boş');
+  pv=out;
+  pvBy={'Deyim':out.filter(x=>x.tur==='Deyim'),'Atasözü':out.filter(x=>x.tur==='Atasözü')};
+  return pv;
+}
+async function pvWord(tur){
+  await loadPv();
+  const L=pvBy[tur];
+  if(!L||!L.length) throw new Error('boş');
+  const used=new Set(Object.values(words).map(w=>(w.tur||'Kelime')+'|'+w.madde));
+  let w=null;
+  for(let n=0;n<30;n++){
+    w=L[Math.floor(Math.random()*L.length)];
+    if(!used.has(w.tur+'|'+w.madde)) break;
+  }
+  return {tur:w.tur,madde:w.madde,anlam:w.anlam,ornek:w.ornek};
+}
+async function searchPv(q){
+  const L=await loadPv();
+  const starts=[],has=[];
+  for(const x of L){
+    if(x.k.startsWith(q)) starts.push(x);
+    else if(x.k.includes(q)) has.push(x);
+    if(starts.length>=20) break;
+  }
+  return starts.concat(has).slice(0,20).map(x=>({tur:x.tur,madde:x.madde,anlam:x.anlam,ornek:x.ornek}));
+}
+const TURLER=['Kelime','Deyim','Atasözü'];
+const randTur=()=>TURLER[Math.floor(Math.random()*TURLER.length)];
+async function getItem(tur){
+  if(tur!=='Kelime'){
+    try{const w=await pvWord(tur);status='';return w}
+    catch(e){status='Deyim ve atasözü listesi yüklenemedi, kelime seçildi.'}
+  }
+  const w=await getWord();
+  return Object.assign({tur:'Kelime'},w);
+}
+
 // ---- Zamanlama ----
 function slots(days=7){
   const out=[];
@@ -134,7 +197,7 @@ function slots(days=7){
 async function fill(onlyToday){
   for(const s of slots()){
     if(onlyToday&&!s.today) continue;
-    if(!words[s.k]){words[s.k]=await getWord();LS.set('words',words)}
+    if(!words[s.k]){words[s.k]=await getItem(randTur());LS.set('words',words)}
   }
 }
 async function schedule(){
@@ -148,7 +211,7 @@ async function schedule(){
     const list=[];
     slots().forEach((s,n)=>{
       const w=words[s.k];
-      if(w&&s.t>new Date()) list.push({id:n+1,title:w.madde,body:w.anlam[0],schedule:{at:s.t,allowWhileIdle:true}});
+      if(w&&s.t>new Date()) list.push({id:n+1,title:(w.tur&&w.tur!=='Kelime')?w.tur+' · '+w.madde:w.madde,body:w.anlam[0],largeBody:w.anlam[0]+(w.ornek?'\n'+w.ornek:''),schedule:{at:s.t,allowWhileIdle:true}});
     });
     if(list.length) await ln.schedule({notifications:list});
   }catch(e){status='Bildirimler kurulamadı.'}
@@ -159,48 +222,57 @@ async function refresh(){
 }
 
 // ---- Arayüz ----
-const isFav=m=>favs.some(f=>f.madde===m);
+const keyOf=w=>(w.tur||'Kelime')+'|'+w.madde;
+const isFav=w=>favs.some(f=>keyOf(f)===keyOf(w));
 function card(w,label){
-  return `<div class="card"><button class="fav" aria-label="Favori" data-fav="${esc(w.madde)}">${isFav(w.madde)?'★':'☆'}</button>
-  <small>${esc(label)}</small><h2>${esc(w.madde)}</h2>
-  <ol>${w.anlam.map(a=>`<li>${esc(a)}</li>`).join('')}</ol>
+  const tur=w.tur||'Kelime';
+  return `<div class="card"><button class="fav" aria-label="Favori" data-fav="${esc(keyOf(w))}">${isFav(w)?'★':'☆'}</button>
+  <small>${esc(label)}</small><span class="tag">${esc(tur)}</span><h2${w.madde.length>24?' class="long"':''}>${esc(w.madde)}</h2>
+  ${w.anlam.length>1?`<ol>${w.anlam.map(a=>`<li>${esc(a)}</li>`).join('')}</ol>`:`<p class="mean">${esc(w.anlam[0])}</p>`}
   ${w.ornek?`<p class="ex">${esc(w.ornek)}</p>`:''}
-  <button class="lnk" data-open="${esc(w.madde)}">TDK'da aç ↗</button></div>`;
+  ${tur==='Kelime'?`<button class="lnk" data-open="${esc(w.madde)}">TDK'da aç ↗</button>`:''}</div>`;
 }
 function view(){
   const today=dstr(new Date());
   if(tab==='today'){
     const items=slots().filter(s=>s.today).map(s=>words[s.k]).filter(Boolean);
-    let h=`<div class="hd"><h1>Bugünün kelimesi</h1><button class="ic${searchOpen?' on':''}" id="sbtn" aria-label="Kelime ara"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg></button></div>`;
+    let h=`<div class="hd"><h1>Bugün</h1><button class="ic${searchOpen?' on':''}" id="sbtn" aria-label="Ara"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg></button></div>`;
     if(searchOpen){
-      h+=`<div class="sbox"><input id="q" type="search" placeholder="TDK'da kelime ara" autocomplete="off" autocapitalize="none" spellcheck="false" value="${esc(searchQ)}"><button class="btn" id="go">Ara</button></div>`;
+      h+=`<div class="sbox"><input id="q" type="search" placeholder="Kelime, deyim veya atasözü ara" autocomplete="off" autocapitalize="none" spellcheck="false" value="${esc(searchQ)}"><button class="btn" id="go">Ara</button></div>`;
       if(searchRes){
-        if(searchRes.loading) h+='<p class="empty">Aranıyor…</p>';
-        else if(searchRes.w) h+=card(searchRes.w,'Arama sonucu');
-        else if(searchRes.none) h+=`<p class="empty">“${esc(searchQ)}” TDK sözlüğünde bulunamadı.</p>`;
-        else h+='<p class="empty">TDK\'ya ulaşılamadı. İnternet bağlantını kontrol et.</p>';
+        const r=searchRes;
+        if(r.loading) h+='<p class="empty">Aranıyor…</p>';
+        else{
+          if(r.word) h+=card(r.word,'TDK sözlüğü');
+          if(r.local.length) h+=`<p class="sec">Deyim ve atasözleri (${r.local.length}${r.local.length>=20?'+':''})</p>`+r.local.map(x=>card(x,'Arama sonucu')).join('');
+          if(!r.word&&!r.local.length) h+=r.werr?'<p class="empty">Listede eşleşme yok ve TDK\'ya ulaşılamadı. İnternet bağlantını kontrol et.</p>':`<p class="empty">“${esc(searchQ)}” bulunamadı.</p>`;
+          else if(r.werr) h+='<p class="note">Kelime sözlüğüne (TDK) ulaşılamadı, yalnızca deyim ve atasözleri arandı.</p>';
+        }
       }
     }
-    h+=items.length?items.map((w,i)=>card(w,items.length>1?(i+1)+'. kelime':'Bugün')).join(''):'<p class="empty">Kelime yükleniyor…</p>';
+    h+=items.length?items.map((w,i)=>card(w,items.length>1?(i+1)+'. bildirim':'Bugün')).join(''):'<p class="empty">Yükleniyor…</p>';
     if(extra) h+=card(extra,'Rastgele');
-    h+='<button class="btn alt" id="rnd">Rastgele kelime getir</button>';
+    h+='<button class="btn alt" id="rnd">Rastgele getir</button>';
     if(status) h+=`<p class="note">${esc(status)}</p>`;
     return h;
   }
   if(tab==='hist'){
     const keys=Object.keys(words).filter(k=>k.slice(0,10)<today).sort().reverse();
-    return '<h1>Geçmiş kelimeler</h1>'+(keys.length?keys.map(k=>card(words[k],k.slice(0,10).split('-').reverse().join('.'))).join(''):'<p class="empty">Henüz geçmiş kelime yok. Yarın buraya eklenecek.</p>');
+    return '<h1>Geçmiş</h1>'+(keys.length?keys.map(k=>card(words[k],k.slice(0,10).split('-').reverse().join('.'))).join(''):'<p class="empty">Henüz geçmiş yok. Yarın buraya eklenecek.</p>');
   }
   if(tab==='favs'){
-    return '<h1>Favoriler</h1>'+(favs.length?favs.map(w=>card(w,'Favori')).join(''):'<p class="empty">Bir kelimenin yıldızına dokunarak favorilere ekle.</p>');
+    return '<h1>Favoriler</h1>'+(favs.length?favs.map(w=>card(w,'Favori')).join(''):'<p class="empty">Bir kartın yıldızına dokunarak favorilere ekle.</p>');
   }
-  let h='<h1>Ayarlar</h1><label for="cnt">Günde kaç kelime?</label><select id="cnt">';
+  let h='<h1>Ayarlar</h1><label for="cnt">Günde kaç bildirim?</label><select id="cnt">';
   for(let i=1;i<=3;i++) h+=`<option value="${i}"${settings.count===i?' selected':''}>${i}</option>`;
   h+='</select><label for="hr">İlk bildirim saati</label><select id="hr">';
   for(let i=7;i<=16;i++) h+=`<option value="${i}"${settings.hour===i?' selected':''}>${pad(i)}:00</option>`;
-  h+='</select><p class="note">Birden fazla kelimede sonraki bildirimler 4 saat arayla gelir. Kelimeler uygulama her açıldığında 7 gün öncesinden hazırlanır; uygulamayı haftada en az bir kez aç.</p>';
+  h+='</select><p class="note">Her bildirimde kelime, deyim ya da atasözünden biri rastgele gelir. Birden fazla bildirimde sonrakiler 4 saat arayla gelir. İçerik uygulama her açıldığında 7 gün öncesinden hazırlanır; uygulamayı haftada en az bir kez aç.</p>';
   h+='<button class="btn alt" id="test">Deneme bildirimi gönder</button>';
   h+=`<p class="note">Lugat-ı Mergen · sürüm ${esc(VERSION.startsWith('__')?'geliştirme':VERSION)}</p>`;
+  h+=`<details class="lic"><summary>Kaynaklar ve lisanslar</summary>
+    <p>Kelime anlamları TDK Güncel Türkçe Sözlük'ten alınır. Kelime listesi CanNuhlar/Turkce-Kelime-Listesi, deyim ve atasözleri orhanbalci/pv projesinden gelir. orhanbalci/pv projesinin lisansı:</p>
+    <pre>${esc(licText||'MIT Lisansı — github.com/orhanbalci/pv')}</pre></details>`;
   if(status) h+=`<p class="note">${esc(status)}</p>`;
   return h;
 }
@@ -214,10 +286,11 @@ document.addEventListener('click',async e=>{
   const t=e.target.closest('button')||e.target;
   if(t.dataset.t){tab=t.dataset.t;render();return}
   if(t.dataset.fav){
-    const m=t.dataset.fav;
-    if(isFav(m)) favs=favs.filter(f=>f.madde!==m);
+    const key=t.dataset.fav;
+    if(favs.some(f=>keyOf(f)===key)) favs=favs.filter(f=>keyOf(f)!==key);
     else{
-      const w=Object.values(words).concat(extra?[extra]:[],searchRes&&searchRes.w?[searchRes.w]:[]).find(x=>x.madde===m);
+      const pool=Object.values(words).concat(extra?[extra]:[],searchRes&&searchRes.word?[searchRes.word]:[],searchRes&&searchRes.local?searchRes.local:[]);
+      const w=pool.find(x=>keyOf(x)===key);
       if(w) favs.push(w);
     }
     LS.set('favs',favs);render();return;
@@ -231,7 +304,7 @@ document.addEventListener('click',async e=>{
   }
   if(t.id==='go'){doSearch();return}
   if(t.dataset.open){window.open('https://sozluk.gov.tr/?kelime='+encodeURIComponent(t.dataset.open),'_blank');return}
-  if(t.id==='rnd'){t.textContent='Getiriliyor…';extra=await getWord();render()}
+  if(t.id==='rnd'){t.textContent='Getiriliyor…';extra=await getItem(randTur());render()}
   if(t.id==='test'){
     const ln=LN();
     if(!ln){status='Bildirimler yalnızca telefondaki uygulamada çalışır.';render();return}
@@ -265,12 +338,14 @@ async function doSearch(){
   const q=((inp&&inp.value)||'').trim().toLocaleLowerCase('tr');
   if(!q) return;
   searchQ=q;searchRes={loading:true};render();
-  try{const w=await lookup(q,8);searchRes=w?{w}:{none:true}}
-  catch(err){searchRes={err:true}}
-  render();
+  let local=[],word=null,werr=false;
+  try{local=await searchPv(q)}catch(err){}
+  try{word=await lookup(q,8);if(word) word.tur='Kelime'}catch(err){werr=true}
+  searchRes={word,local,werr};render();
 }
 document.addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target.id==='q'){e.preventDefault();doSearch()}});
 
+fetch('lisans-deyimler.txt').then(r=>r.ok?r.text():'').then(t=>{licText=t;if(tab==='set')render()}).catch(()=>{});
 render();
 refresh();
 </script>
