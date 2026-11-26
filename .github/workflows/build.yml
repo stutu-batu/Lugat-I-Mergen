@@ -24,6 +24,12 @@ jobs:
       - name: Kelime listesini indir
         run: curl -fL -o www/kelimeler.txt https://raw.githubusercontent.com/CanNuhlar/Turkce-Kelime-Listesi/master/turkce_kelime_listesi.txt && wc -l www/kelimeler.txt
 
+      - name: Deyim ve atasozu listesini indir
+        run: |
+          curl -fL -o www/deyimler.json https://raw.githubusercontent.com/orhanbalci/pv/main/deyimler_atasozleri.json
+          curl -fL -o www/lisans-deyimler.txt https://raw.githubusercontent.com/orhanbalci/pv/main/LICENSE
+          node -e "const a=require('./www/deyimler.json');console.log('Deyim/atasozu kaydi:',a.length);if(!Array.isArray(a)||a.length<1000)process.exit(1)"
+
       - name: Surumu belirle
         run: |
           BASE=$(node -p "require('./package.json').version")
